@@ -44,10 +44,6 @@ void detachServoSafely() {
   }
 }
 
-// Price validation
-bool isPriceValid(float price) {
-  return price >= PRICE_MIN * 0.5 && price <= PRICE_MAX * 1.5;
-}
 
 // Map stock price to pulse width with boundary checking
 int priceToPulse(float price) {
@@ -61,19 +57,39 @@ int priceToPulse(float price) {
   );
 }
 
+float clampPrice(float price) {
+  // Keep a very wide validation range just to catch obviously invalid prices
+  if (price < 0 || price > 1000000) {
+    return -1;  // Return -1 for obviously invalid prices
+  }
+  
+  // Clamp price to our min/max range
+  if (price < PRICE_MIN) {
+    Serial.printf("Price $%.2f below range, clamping to $%.2f\n", price, PRICE_MIN);
+    return PRICE_MIN;
+  }
+  if (price > PRICE_MAX) {
+    Serial.printf("Price $%.2f above range, clamping to $%.2f\n", price, PRICE_MAX);
+    return PRICE_MAX;
+  }
+  return price;
+}
+
 void moveToPrice(float price) {
-  if (!isPriceValid(price)) {
+  float clampedPrice = clampPrice(price);
+  if (clampedPrice < 0) {
     snprintf(state.lastError, sizeof(state.lastError), "Invalid price: %.2f", price);
     Serial.println(state.lastError);
     return;
   }
 
-  if (abs(price - state.lastPrice) < 0.1) {
+  if (abs(clampedPrice - state.lastPrice) < 0.1) {
     return;
   }
 
-  int targetPulse = priceToPulse(price);
-  Serial.printf("Price: $%.2f -> Pulse: %d\n", price, targetPulse);
+  int targetPulse = priceToPulse(clampedPrice);
+  Serial.printf("Original price: $%.2f, Clamped price: $%.2f -> Pulse: %d\n", 
+                price, clampedPrice, targetPulse);
 
   attachServoSafely();
   
@@ -123,13 +139,13 @@ float getStockPrice() {
       const char* priceStr = doc["Global Quote"]["05. price"];
       if (priceStr) {
         float price = atof(priceStr);
-        if (isPriceValid(price)) {
+        if (price > 0) {  // Basic sanity check
           state.successfulRequests++;
           state.lastSuccessfulUpdate = millis();
           http.end();
-          return price;
+          return price;  // Return raw price, let moveToPrice handle clamping
         } else {
-          snprintf(state.lastError, sizeof(state.lastError), "Price out of range: %.2f", price);
+          snprintf(state.lastError, sizeof(state.lastError), "Invalid price: %.2f", price);
         }
       } else {
         snprintf(state.lastError, sizeof(state.lastError), "No price in response");
@@ -171,6 +187,30 @@ bool connectToWiFi() {
   }
 }
 
+void performStartupCalibration() {
+  Serial.println("Performing startup calibration...");
+  
+  attachServoSafely();
+  
+  // Move to minimum position
+  Serial.println("Moving to minimum position...");
+  stockDial.writeMicroseconds(PULSE_WIDTH_MAX);  // Remember: MAX pulse = MIN price position
+  delay(2000);
+  
+  // Move to maximum position
+  Serial.println("Moving to maximum position...");
+  stockDial.writeMicroseconds(PULSE_WIDTH_MIN);  // MIN pulse = MAX price position
+  delay(2000);
+  
+  // Return to center
+  Serial.println("Moving to center position...");
+  stockDial.writeMicroseconds((PULSE_WIDTH_MAX + PULSE_WIDTH_MIN) / 2);
+  delay(1000);
+  
+  detachServoSafely();
+  Serial.println("Calibration complete");
+}
+
 void setup() {
   Serial.begin(115200);
   
@@ -182,6 +222,9 @@ void setup() {
   
   Serial.printf("\nInitializing %s stock price dial...\n", STOCK_TICKER);
   Serial.printf("Compile time: %s %s\n", __DATE__, __TIME__);
+  
+  // Perform calibration before WiFi connection
+  performStartupCalibration();
   
   if (connectToWiFi()) {
     float price = getStockPrice();

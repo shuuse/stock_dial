@@ -2,8 +2,8 @@
 
 // Stock Configuration
 const char* STOCK_TICKER = "NVDA";
-const float PRICE_MIN = 95.0;
-const float PRICE_MAX = 150.0;
+const float PRICE_MIN = 125.0;
+const float PRICE_MAX = 145.0;
 
 // Servo Configuration
 const int SERVO_PIN = 2;
